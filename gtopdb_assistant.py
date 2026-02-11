@@ -26,6 +26,7 @@ MAX_USER_INPUT_TOKENS = 500
 MAX_CHAT_HISTORY_MESSAGES = 3
 MAX_QUERY_RESULTS = 50
 
+
 def count_tokens(text: str, model: str = "gpt-4") -> int:
     """Count tokens in text using tiktoken"""
     try:
@@ -34,6 +35,7 @@ def count_tokens(text: str, model: str = "gpt-4") -> int:
     except:
         # Fallback to rough estimation
         return len(text.split()) * 1.3
+
 
 # Page configuration
 st.set_page_config(
@@ -61,12 +63,12 @@ st.markdown("""
         --warning-color: #f59e0b;
         --error-color: #ef4444;
     }
-    
+
     /* Global styles */
     .stApp {
         background: #0a0a0a;
     }
-    
+
     /* Header styling */
     .main-header {
         background: linear-gradient(90deg, #1e1e1e 0%, #2a2a2a 100%);
@@ -75,20 +77,20 @@ st.markdown("""
         margin-bottom: 2rem;
         border: 1px solid #404040;
     }
-    
+
     .main-header h1 {
         color: #ececec;
         font-size: 2rem;
         font-weight: 600;
         margin: 0;
     }
-    
+
     .main-header p {
         color: #9ca3af;
         font-size: 1rem;
         margin-top: 0.5rem;
     }
-    
+
     /* Input fields */
     .stTextInput input, .stTextArea textarea {
         background-color: #1a1a1a !important;
@@ -99,12 +101,12 @@ st.markdown("""
         font-size: 0.95rem !important;
         transition: all 0.2s ease !important;
     }
-    
+
     .stTextInput input:focus, .stTextArea textarea:focus {
         border-color: #6366f1 !important;
         box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1) !important;
     }
-    
+
     /* Buttons */
     .stButton button {
         background: #2a2a2a !important;
@@ -117,12 +119,12 @@ st.markdown("""
         transition: all 0.2s ease !important;
         margin-bottom: 0.5rem !important;
     }
-    
+
     .stButton button:hover {
         background: #3a3a3a !important;
         border-color: #6366f1 !important;
     }
-    
+
     /* Chat messages */
     .chat-message {
         padding: 1.25rem;
@@ -131,7 +133,7 @@ st.markdown("""
         animation: slideIn 0.2s ease;
         border: 1px solid #404040;
     }
-    
+
     @keyframes slideIn {
         from {
             opacity: 0;
@@ -142,17 +144,17 @@ st.markdown("""
             transform: translateY(0);
         }
     }
-    
+
     .user-message {
         background: #2a2a2a;
         border-left: 3px solid #6366f1;
     }
-    
+
     .assistant-message {
         background: #1a1a1a;
         border-left: 3px solid #8b5cf6;
     }
-    
+
     .message-header {
         font-weight: 600;
         color: #9ca3af;
@@ -161,13 +163,13 @@ st.markdown("""
         text-transform: uppercase;
         letter-spacing: 0.5px;
     }
-    
+
     .message-content {
         color: #ececec;
         line-height: 1.6;
         font-size: 0.95rem;
     }
-    
+
     /* SQL query display */
     .sql-query {
         background: #1a1a1a;
@@ -178,18 +180,18 @@ st.markdown("""
         border: 1px solid #404040;
         overflow-x: auto;
     }
-    
+
     .sql-query code {
         color: #a5b4fc;
         font-size: 0.85rem;
     }
-    
+
     /* Sidebar */
     .css-1d391kg, [data-testid="stSidebar"] {
         background: #0a0a0a !important;
         border-right: 1px solid #404040 !important;
     }
-    
+
     .sidebar-header {
         background: #1a1a1a;
         padding: 1rem;
@@ -197,7 +199,7 @@ st.markdown("""
         margin-bottom: 1rem;
         border: 1px solid #404040;
     }
-    
+
     .chat-history-item {
         background: #1a1a1a;
         padding: 0.75rem;
@@ -210,18 +212,18 @@ st.markdown("""
         text-overflow: ellipsis;
         white-space: nowrap;
     }
-    
+
     .chat-history-item:hover {
         background: #2a2a2a;
         border-color: #6366f1;
     }
-    
+
     .chat-history-item-active {
         background: #2a2a2a;
         border-color: #6366f1;
         border-width: 2px;
     }
-    
+
     /* Metrics and stats */
     .metric-card {
         background: #1a1a1a;
@@ -231,19 +233,19 @@ st.markdown("""
         margin-bottom: 1rem;
         text-align: center;
     }
-    
+
     .metric-value {
         font-size: 1.75rem;
         font-weight: 600;
         color: #6366f1;
     }
-    
+
     .metric-label {
         color: #9ca3af;
         font-size: 0.85rem;
         margin-top: 0.5rem;
     }
-    
+
     /* Tables */
     .dataframe {
         background-color: #1a1a1a !important;
@@ -251,7 +253,7 @@ st.markdown("""
         overflow: hidden !important;
         border: 1px solid #404040 !important;
     }
-    
+
     .dataframe thead tr th {
         background-color: #2a2a2a !important;
         color: #ececec !important;
@@ -259,21 +261,90 @@ st.markdown("""
         padding: 0.75rem !important;
         border-bottom: 1px solid #404040 !important;
     }
-    
+
     .dataframe tbody tr {
         background-color: #1a1a1a !important;
         border-bottom: 1px solid #404040 !important;
     }
-    
+
     .dataframe tbody tr:hover {
         background-color: #2a2a2a !important;
     }
-    
+
     .dataframe tbody tr td {
         color: #ececec !important;
         padding: 0.75rem !important;
     }
-    
+
+    /* Markdown tables */
+    table {
+        background-color: #1a1a1a !important;
+        border-radius: 8px !important;
+        overflow: hidden !important;
+        border-collapse: collapse !important;
+        width: 100% !important;
+        margin: 1rem 0 !important;
+        border: 1px solid #404040 !important;
+    }
+
+    table thead tr th {
+        background-color: #2a2a2a !important;
+        color: #ececec !important;
+        font-weight: 600 !important;
+        padding: 0.75rem !important;
+        border-bottom: 2px solid #404040 !important;
+        text-align: left !important;
+    }
+
+    table tbody tr {
+        background-color: #1a1a1a !important;
+        border-bottom: 1px solid #404040 !important;
+    }
+
+    table tbody tr:hover {
+        background-color: #2a2a2a !important;
+    }
+
+    table tbody tr td {
+        color: #ececec !important;
+        padding: 0.75rem !important;
+        border-right: 1px solid #404040 !important;
+    }
+
+    table tbody tr td:last-child {
+        border-right: none !important;
+    }
+
+    /* Markdown formatting in messages */
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        color: #ececec !important;
+        margin-top: 1rem !important;
+        margin-bottom: 0.5rem !important;
+    }
+
+    .stMarkdown p {
+        color: #ececec !important;
+        line-height: 1.6 !important;
+    }
+
+    .stMarkdown strong {
+        color: #6366f1 !important;
+        font-weight: 600 !important;
+    }
+
+    .stMarkdown ul, .stMarkdown ol {
+        color: #ececec !important;
+        margin-left: 1.5rem !important;
+    }
+
+    .stMarkdown code {
+        background-color: #2a2a2a !important;
+        color: #a5b4fc !important;
+        padding: 0.2rem 0.4rem !important;
+        border-radius: 4px !important;
+        font-family: 'Courier New', monospace !important;
+    }
+
     /* Info boxes */
     .info-box {
         background: rgba(59, 130, 246, 0.1);
@@ -283,7 +354,7 @@ st.markdown("""
         margin: 1rem 0;
         color: #ececec;
     }
-    
+
     .warning-box {
         background: rgba(245, 158, 11, 0.1);
         border-left: 3px solid #f59e0b;
@@ -292,7 +363,7 @@ st.markdown("""
         margin: 1rem 0;
         color: #ececec;
     }
-    
+
     .success-box {
         background: rgba(16, 185, 129, 0.1);
         border-left: 3px solid #10b981;
@@ -301,12 +372,12 @@ st.markdown("""
         margin: 1rem 0;
         color: #ececec;
     }
-    
+
     /* Loading spinner */
     .stSpinner > div {
         border-top-color: #6366f1 !important;
     }
-    
+
     /* Expander */
     .streamlit-expanderHeader {
         background-color: #1a1a1a !important;
@@ -314,22 +385,22 @@ st.markdown("""
         border: 1px solid #404040 !important;
         color: #ececec !important;
     }
-    
+
     .streamlit-expanderHeader:hover {
         border-color: #6366f1 !important;
     }
-    
+
     /* Select boxes */
     .stSelectbox {
         background-color: #1a1a1a !important;
         border-radius: 8px !important;
     }
-    
+
     .stSelectbox div[data-baseweb="select"] {
         background-color: #1a1a1a !important;
         border-color: #404040 !important;
     }
-    
+
     /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
@@ -337,7 +408,7 @@ st.markdown("""
         padding: 0.5rem;
         border-radius: 8px;
     }
-    
+
     .stTabs [data-baseweb="tab"] {
         background-color: #2a2a2a;
         border-radius: 8px;
@@ -346,33 +417,33 @@ st.markdown("""
         font-weight: 500;
         border: 1px solid #404040;
     }
-    
+
     .stTabs [aria-selected="true"] {
         background: #6366f1;
         color: white;
         border-color: #6366f1;
     }
-    
+
     /* Scrollbar */
     ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
     }
-    
+
     ::-webkit-scrollbar-track {
         background: #1a1a1a;
         border-radius: 8px;
     }
-    
+
     ::-webkit-scrollbar-thumb {
         background: #404040;
         border-radius: 8px;
     }
-    
+
     ::-webkit-scrollbar-thumb:hover {
         background: #6366f1;
     }
-    
+
     /* Agent badge */
     .agent-badge {
         display: inline-block;
@@ -382,24 +453,24 @@ st.markdown("""
         font-weight: 600;
         margin-left: 0.5rem;
     }
-    
+
     .langchain-badge {
         background: rgba(59, 130, 246, 0.15);
         color: #60a5fa;
         border: 1px solid #3b82f6;
     }
-    
+
     .crewai-badge {
         background: rgba(139, 92, 246, 0.15);
         color: #a78bfa;
         border: 1px solid #8b5cf6;
     }
-    
+
     /* Fix button spacing in sidebar */
     [data-testid="stSidebar"] .stButton {
         margin-bottom: 0.5rem;
     }
-    
+
     /* Welcome message */
     .welcome-container {
         text-align: center;
@@ -409,12 +480,12 @@ st.markdown("""
         border: 1px solid #404040;
         margin: 2rem 0;
     }
-    
+
     .welcome-container h2 {
         color: #6366f1;
         margin-bottom: 1rem;
     }
-    
+
     .welcome-container p {
         color: #9ca3af;
         line-height: 1.8;
@@ -450,37 +521,76 @@ def init_database():
 
         # Create users table
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id SERIAL PRIMARY KEY,
-                username VARCHAR(50) UNIQUE NOT NULL,
-                password_hash VARCHAR(255) NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+                    CREATE TABLE IF NOT EXISTS users
+                    (
+                        user_id
+                        SERIAL
+                        PRIMARY
+                        KEY,
+                        username
+                        VARCHAR
+                    (
+                        50
+                    ) UNIQUE NOT NULL,
+                        password_hash VARCHAR
+                    (
+                        255
+                    ) NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
 
         # Create chat_sessions table
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS chat_sessions (
-                session_id VARCHAR(100) PRIMARY KEY,
-                user_id INTEGER REFERENCES users(user_id) ON DELETE CASCADE,
-                title VARCHAR(255) DEFAULT 'New Chat',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+                    CREATE TABLE IF NOT EXISTS chat_sessions
+                    (
+                        session_id
+                        VARCHAR
+                    (
+                        100
+                    ) PRIMARY KEY,
+                        user_id INTEGER REFERENCES users
+                    (
+                        user_id
+                    ) ON DELETE CASCADE,
+                        title VARCHAR
+                    (
+                        255
+                    ) DEFAULT 'New Chat',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
 
         # Create chat_messages table
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS chat_messages (
-                message_id SERIAL PRIMARY KEY,
-                session_id VARCHAR(100) REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
-                role VARCHAR(20) NOT NULL,
-                content TEXT NOT NULL,
-                agent_type VARCHAR(20),
-                sql_query TEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+                    CREATE TABLE IF NOT EXISTS chat_messages
+                    (
+                        message_id
+                        SERIAL
+                        PRIMARY
+                        KEY,
+                        session_id
+                        VARCHAR
+                    (
+                        100
+                    ) REFERENCES chat_sessions
+                    (
+                        session_id
+                    ) ON DELETE CASCADE,
+                        role VARCHAR
+                    (
+                        20
+                    ) NOT NULL,
+                        content TEXT NOT NULL,
+                        agent_type VARCHAR
+                    (
+                        20
+                    ),
+                        sql_query TEXT,
+                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
 
         conn.commit()
         cur.close()
@@ -571,9 +681,9 @@ def get_user_sessions(user_id: int) -> List[Dict]:
     if conn:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
-            """SELECT session_id, title, created_at, updated_at 
-               FROM chat_sessions 
-               WHERE user_id = %s 
+            """SELECT session_id, title, created_at, updated_at
+               FROM chat_sessions
+               WHERE user_id = %s
                ORDER BY updated_at DESC""",
             (user_id,)
         )
@@ -583,7 +693,8 @@ def get_user_sessions(user_id: int) -> List[Dict]:
     return []
 
 
-def save_chat_message(session_id: str, role: str, content: str, agent_type: Optional[str] = None, sql_query: Optional[str] = None):
+def save_chat_message(session_id: str, role: str, content: str, agent_type: Optional[str] = None,
+                      sql_query: Optional[str] = None):
     """Save chat message to database"""
     conn = get_db_connection()
     if conn:
@@ -637,7 +748,8 @@ def generate_chat_title(first_message: str) -> str:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Generate a short, concise title (max 6 words) for this chat based on the user's first message. Only return the title, nothing else."},
+                {"role": "system",
+                 "content": "Generate a short, concise title (max 6 words) for this chat based on the user's first message. Only return the title, nothing else."},
                 {"role": "user", "content": first_message}
             ],
             max_tokens=20,
@@ -657,20 +769,20 @@ def get_langchain_agent():
     """Create LangChain SQL agent with comprehensive database schema knowledge"""
     try:
         db_uri = f"postgresql://{st.secrets['connections']['postgresql']['username']}:{st.secrets['connections']['postgresql']['password']}@{st.secrets['connections']['postgresql']['host']}:{st.secrets['connections']['postgresql']['port']}/{st.secrets['connections']['postgresql']['database']}"
-        
+
         # Only include essential tables to reduce context size
         essential_tables = [
-            'ligand', 'ligand_physchem', 'ligand_structure', 'interaction', 
+            'ligand', 'ligand_physchem', 'ligand_structure', 'interaction',
             'object', 'species', 'reference', 'ligand2family', 'object2family',
             'ligand2synonym', 'interaction_affinity_refs'
         ]
-        
+
         db = SQLDatabase.from_uri(
             db_uri,
             include_tables=essential_tables,
             sample_rows_in_table_info=1
         )
-        
+
         # Use GPT-4o (128k context) instead of GPT-4 (8k context)
         llm = ChatOpenAI(
             model="gpt-4o",
@@ -707,12 +819,30 @@ CRITICAL DATABASE SCHEMA KNOWLEDGE:
    - Approved drugs: WHERE ligand.approved = true
    - Drug-target interactions: JOIN interaction ON ligand.ligand_id = interaction.ligand_id JOIN object ON interaction.object_id = object.object_id
 
+OUTPUT FORMAT RULES (CRITICAL):
+- ALWAYS format your response in MARKDOWN
+- When returning lists of items, ALWAYS use a MARKDOWN TABLE
+- Include relevant columns (name, molecular_weight, type, etc.)
+- Add a brief summary before the table
+- Keep tables clean and readable
+- Use proper markdown table syntax with | and ---
+
+EXAMPLE OUTPUT FORMAT:
+Found 15 ligands with molecular weight > 500:
+
+| Ligand Name | Molecular Weight | Type | Approved |
+|-------------|------------------|------|----------|
+| Compound A | 523.4 | Small molecule | Yes |
+| Compound B | 601.2 | Natural product | No |
+
+Total: 15 ligands match the criteria.
+
 RULES:
 - ALWAYS LIMIT results to {MAX_QUERY_RESULTS} rows
 - Use specific column names, NOT SELECT *
 - JOIN ligand_physchem when querying molecular properties
 - Show the SQL query in your response
-- Keep explanations concise"""
+- Format output as MARKDOWN TABLES"""
 
         toolkit = SQLDatabaseToolkit(db=db, llm=llm)
 
@@ -741,8 +871,10 @@ def query_with_langchain(question: str, chat_history: List[Dict]) -> tuple[str, 
             return "Error: Could not initialize LangChain agent", None
 
         # Limit chat history to last N messages to save tokens
-        recent_history = chat_history[-MAX_CHAT_HISTORY_MESSAGES:] if len(chat_history) > MAX_CHAT_HISTORY_MESSAGES else chat_history
-        context = "\n".join([f"{msg['role']}: {msg['content'][:200]}" for msg in recent_history])  # Truncate each message
+        recent_history = chat_history[-MAX_CHAT_HISTORY_MESSAGES:] if len(
+            chat_history) > MAX_CHAT_HISTORY_MESSAGES else chat_history
+        context = "\n".join(
+            [f"{msg['role']}: {msg['content'][:200]}" for msg in recent_history])  # Truncate each message
 
         full_question = f"""Previous conversation (recent):
 {context}
@@ -784,10 +916,10 @@ Important:
 def query_gtopdb_tool(query: str) -> str:
     """
     Execute SQL queries on the GtoPdb database with result limits.
-    
+
     Args:
         query: SQL query to execute (will be limited to 50 rows)
-        
+
     Returns:
         Query results as a JSON string
     """
@@ -797,12 +929,12 @@ def query_gtopdb_tool(query: str) -> str:
             # Add LIMIT if not present
             if "LIMIT" not in query.upper():
                 query = query.rstrip(";") + f" LIMIT {MAX_QUERY_RESULTS}"
-            
+
             cur = conn.cursor(cursor_factory=RealDictCursor)
             cur.execute(query)
             results = cur.fetchall()
             cur.close()
-            
+
             # Limit results
             limited_results = results[:MAX_QUERY_RESULTS]
             return json.dumps([dict(r) for r in limited_results], default=str)
@@ -827,7 +959,7 @@ KEY SCHEMA KNOWLEDGE:
    - ligand_physchem table: molecular_weight, h_bond_acceptors, h_bond_donors, lipinski_s_rule_of_five
    - ligand_structure table: smiles, inchi, inchikey
    - ALWAYS JOIN ligand_physchem when querying molecular weight or physicochemical properties!
-   
+
    Example: SELECT l.name, lp.molecular_weight FROM ligand l 
             JOIN ligand_physchem lp ON l.ligand_id = lp.ligand_id 
             WHERE lp.molecular_weight > 500 LIMIT {MAX_QUERY_RESULTS}
@@ -856,18 +988,45 @@ RULES:
             tools=[query_gtopdb_tool]
         )
 
-        # Create Data Analyst Agent
+        # Create Data Analyst Agent with markdown formatting instructions
         analyst = Agent(
             role='Pharmacology Data Analyst',
-            goal='Interpret GtoPdb pharmacological data clearly and concisely',
-            backstory="""You are a pharmacology expert who interprets drug-target interactions,
-            ligand properties, and biological data. You provide clear, concise explanations.""",
+            goal='Format GtoPdb data as clean, readable MARKDOWN tables',
+            backstory=f"""You are a pharmacology expert who presents data professionally.
+
+CRITICAL OUTPUT FORMATTING RULES:
+- ALWAYS format responses in MARKDOWN
+- When showing lists of items, ALWAYS use MARKDOWN TABLES
+- Include relevant columns (name, molecular_weight, type, approved, etc.)
+- Add a brief summary before the table
+- Format numbers properly (e.g., MW with 1 decimal place)
+
+EXAMPLE OUTPUT FORMAT:
+
+Found 15 ligands with molecular weight > 500:
+
+| Ligand Name | Molecular Weight (Da) | Type | Approved |
+|-------------|----------------------|------|----------|
+| Compound A | 523.4 | Small molecule | Yes |
+| Compound B | 601.2 | Natural product | No |
+| Compound C | 587.1 | Peptide | Yes |
+
+**Total:** 15 ligands match the criteria.
+
+**Key findings:**
+- 8 are approved drugs
+- 10 are small molecules
+- Average MW: 567.3 Da
+
+NEVER output data as plain comma-separated text!
+ALWAYS use proper markdown tables!""",
             verbose=True,
             allow_delegation=False
         )
 
         # Limit chat history to save tokens
-        recent_history = chat_history[-MAX_CHAT_HISTORY_MESSAGES:] if len(chat_history) > MAX_CHAT_HISTORY_MESSAGES else chat_history
+        recent_history = chat_history[-MAX_CHAT_HISTORY_MESSAGES:] if len(
+            chat_history) > MAX_CHAT_HISTORY_MESSAGES else chat_history
         context = "\n".join([f"{msg['role']}: {msg['content'][:200]}" for msg in recent_history])
 
         # Create tasks
@@ -890,9 +1049,22 @@ Generate and execute a SQL query for GtoPdb:
         analysis_task = Task(
             description=f"""Review the SQL results and answer: "{question}"
 
-Provide a concise, clear answer focusing on key findings.""",
+CRITICAL: Format your response as MARKDOWN:
+1. Brief summary (1-2 sentences)
+2. MARKDOWN TABLE with results
+3. Key statistics or findings
+
+Example:
+Found 15 ligands with MW > 500:
+
+| Ligand Name | Molecular Weight (Da) |
+|-------------|----------------------|
+| Ligand 1 | 567.3 |
+| Ligand 2 | 532.1 |
+
+**Total:** 15 ligands""",
             agent=analyst,
-            expected_output="Clear, concise answer"
+            expected_output="MARKDOWN formatted answer with table"
         )
 
         # Create and run crew
@@ -914,7 +1086,9 @@ Provide a concise, clear answer focusing on key findings.""",
                 # Try to find end of query
                 lines = result_str[sql_start:].split("\n")
                 for i, line in enumerate(lines):
-                    if line.strip() and not any(keyword in line.upper() for keyword in ["SELECT", "FROM", "WHERE", "JOIN", "GROUP", "ORDER", "HAVING", "LIMIT"]):
+                    if line.strip() and not any(keyword in line.upper() for keyword in
+                                                ["SELECT", "FROM", "WHERE", "JOIN", "GROUP", "ORDER", "HAVING",
+                                                 "LIMIT"]):
                         sql_end = sql_start + result_str[sql_start:].find(line)
                         break
             if sql_end > sql_start:
@@ -937,12 +1111,12 @@ def execute_sql_query(sql_query: str) -> Any:
             # Add LIMIT if not present
             if "LIMIT" not in sql_query.upper():
                 sql_query = sql_query.rstrip(";") + f" LIMIT {MAX_QUERY_RESULTS}"
-            
+
             cur = conn.cursor(cursor_factory=RealDictCursor)
             cur.execute(sql_query)
             results = cur.fetchall()
             cur.close()
-            
+
             # Ensure we don't return more than MAX_QUERY_RESULTS
             limited_results = results[:MAX_QUERY_RESULTS]
             return [dict(r) for r in limited_results]
@@ -977,8 +1151,9 @@ if not st.session_state.user:
 
     with tab1:
         st.markdown("### Welcome Back!")
-        st.markdown('<div class="info-box">Sign in to continue your pharmacology research journey.</div>', unsafe_allow_html=True)
-        
+        st.markdown('<div class="info-box">Sign in to continue your pharmacology research journey.</div>',
+                    unsafe_allow_html=True)
+
         login_username = st.text_input("Username", key="login_user", placeholder="Enter your username")
         login_password = st.text_input("Password", type="password", key="login_pass", placeholder="Enter your password")
 
@@ -997,14 +1172,21 @@ if not st.session_state.user:
 
     with tab2:
         st.markdown("### Create Your Account")
-        st.markdown('<div class="warning-box"><strong>🔒 Registration Requires Master Password:</strong> Only authorized users with the master password can create accounts. Contact your administrator for the master password.</div>', unsafe_allow_html=True)
-        
-        st.markdown('<div class="info-box"><strong>⚠️ Security Notice:</strong> This is a test environment. DO NOT use a password you use elsewhere. Use simple passwords like "123" or "test123".</div>', unsafe_allow_html=True)
-        
-        reg_master_password = st.text_input("Master Password (Required)", type="password", key="reg_master_pass", placeholder="Enter master password to create account")
+        st.markdown(
+            '<div class="warning-box"><strong>🔒 Registration Requires Master Password:</strong> Only authorized users with the master password can create accounts. Contact your administrator for the master password.</div>',
+            unsafe_allow_html=True)
+
+        st.markdown(
+            '<div class="info-box"><strong>⚠️ Security Notice:</strong> This is a test environment. DO NOT use a password you use elsewhere. Use simple passwords like "123" or "test123".</div>',
+            unsafe_allow_html=True)
+
+        reg_master_password = st.text_input("Master Password (Required)", type="password", key="reg_master_pass",
+                                            placeholder="Enter master password to create account")
         reg_username = st.text_input("Username", key="reg_user", placeholder="Choose a username (min 3 characters)")
-        reg_password = st.text_input("Password", type="password", key="reg_pass", placeholder="Choose a password (min 6 characters)")
-        reg_password_confirm = st.text_input("Confirm Password", type="password", key="reg_pass_confirm", placeholder="Confirm your password")
+        reg_password = st.text_input("Password", type="password", key="reg_pass",
+                                     placeholder="Choose a password (min 6 characters)")
+        reg_password_confirm = st.text_input("Confirm Password", type="password", key="reg_pass_confirm",
+                                             placeholder="Confirm your password")
 
         if st.button("📝 Create Account", key="reg_btn", use_container_width=True):
             if not reg_master_password:
@@ -1039,10 +1221,12 @@ st.markdown("""
 
 # Sidebar
 with st.sidebar:
-    st.markdown('<div class="sidebar-header"><h2 style="color: white; margin: 0;">⚙️ Control Panel</h2></div>', unsafe_allow_html=True)
-    
+    st.markdown('<div class="sidebar-header"><h2 style="color: white; margin: 0;">⚙️ Control Panel</h2></div>',
+                unsafe_allow_html=True)
+
     # User info
-    st.markdown(f'<div class="info-box"><strong>👤 User:</strong> {st.session_state.user["username"]}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="info-box"><strong>👤 User:</strong> {st.session_state.user["username"]}</div>',
+                unsafe_allow_html=True)
 
     # Agent selection
     st.markdown("### 🤖 AI Agent")
@@ -1051,9 +1235,10 @@ with st.sidebar:
         ["LangChain", "CrewAI"],
         help="LangChain: Fast SQL agent | CrewAI: Multi-agent system with PostgreSQL tools"
     )
-    
+
     agent_badge_class = "langchain-badge" if st.session_state.agent_type == "LangChain" else "crewai-badge"
-    st.markdown(f'<div class="agent-badge {agent_badge_class}">Using {st.session_state.agent_type}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="agent-badge {agent_badge_class}">Using {st.session_state.agent_type}</div>',
+                unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -1066,32 +1251,32 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("### 💬 Chat History")
-    
+
     # Load user sessions
     sessions = get_user_sessions(st.session_state.user['user_id'])
-    
+
     if sessions:
         for session in sessions:
             is_active = session['session_id'] == st.session_state.current_session_id
-            
+
             # Use container for better layout control
             with st.container():
                 col1, col2 = st.columns([5, 1])
-                
+
                 with col1:
                     # Truncate title to prevent overflow
                     display_title = session['title'][:35] + "..." if len(session['title']) > 35 else session['title']
                     button_label = f"{'📌 ' if is_active else '💬 '}{display_title}"
-                    
+
                     if st.button(
-                        button_label,
-                        key=f"session_{session['session_id']}",
-                        use_container_width=True
+                            button_label,
+                            key=f"session_{session['session_id']}",
+                            use_container_width=True
                     ):
                         st.session_state.current_session_id = session['session_id']
                         st.session_state.messages = load_chat_messages(session['session_id'])
                         st.rerun()
-                
+
                 with col2:
                     if st.button("🗑️", key=f"delete_{session['session_id']}", help="Delete"):
                         delete_chat_session(session['session_id'])
@@ -1112,7 +1297,7 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    
+
     st.markdown("### 💡 Quick Tips")
     st.markdown("""
     <div style="font-size: 0.9rem; color: #94a3b8;">
@@ -1162,27 +1347,32 @@ for idx, message in enumerate(st.session_state.messages):
         </div>
         """, unsafe_allow_html=True)
     else:
-        agent_badge = f'<span class="agent-badge {message.get("agent_type", "").lower()}-badge">{message.get("agent_type", "Assistant")}</span>' if message.get("agent_type") else ""
-        
+        agent_badge = f'<span class="agent-badge {message.get("agent_type", "").lower()}-badge">{message.get("agent_type", "Assistant")}</span>' if message.get(
+            "agent_type") else ""
+
+        # Start the message container
         st.markdown(f"""
         <div class="chat-message assistant-message">
             <div class="message-header">🤖 Assistant {agent_badge}</div>
-            <div class="message-content">{message["content"]}</div>
         </div>
         """, unsafe_allow_html=True)
+
+        # Render the content as markdown (supports tables)
+        st.markdown(message["content"])
 
         # Show SQL query if available
         if message.get("sql_query"):
             with st.expander("📊 View SQL Query & Results"):
                 st.code(message["sql_query"], language="sql")
-                
+
                 # Execute and show results
                 results = execute_sql_query(message["sql_query"])
                 if results:
                     if isinstance(results, list) and len(results) > 0:
                         df = pd.DataFrame(results)
                         st.dataframe(df, use_container_width=True)
-                        st.markdown(f'<div class="success-box">✅ Retrieved {len(results)} rows</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="success-box">✅ Retrieved {len(results)} rows</div>',
+                                    unsafe_allow_html=True)
                     elif isinstance(results, str):
                         st.error(results)
                     else:
@@ -1192,19 +1382,20 @@ for idx, message in enumerate(st.session_state.messages):
 if prompt := st.chat_input("💬 Ask about the GtoPdb database..."):
     # Validate token count
     token_count = count_tokens(prompt)
-    
+
     if token_count > MAX_USER_INPUT_TOKENS:
-        st.error(f"❌ Your message is too long ({token_count} tokens). Please keep it under {MAX_USER_INPUT_TOKENS} tokens (approximately {int(MAX_USER_INPUT_TOKENS / 1.3)} words).")
+        st.error(
+            f"❌ Your message is too long ({token_count} tokens). Please keep it under {MAX_USER_INPUT_TOKENS} tokens (approximately {int(MAX_USER_INPUT_TOKENS / 1.3)} words).")
         st.stop()
-    
+
     # Create session if this is the very first message ever
     if not st.session_state.current_session_id:
         st.session_state.current_session_id = create_chat_session(st.session_state.user['user_id'])
         st.session_state.messages = []
-    
+
     # Check if this is the first message in the session
     is_first_message = len(st.session_state.messages) == 0
-    
+
     # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     save_chat_message(
@@ -1235,27 +1426,30 @@ if prompt := st.chat_input("💬 Ask about the GtoPdb database..."):
         else:
             response, sql_query = query_with_crewai(prompt, st.session_state.messages)
 
-        # Display response
+        # Display response with agent badge
         agent_badge = f'<span class="agent-badge {st.session_state.agent_type.lower()}-badge">{st.session_state.agent_type}</span>'
         st.markdown(f"""
         <div class="chat-message assistant-message">
             <div class="message-header">🤖 Assistant {agent_badge}</div>
-            <div class="message-content">{response}</div>
         </div>
         """, unsafe_allow_html=True)
+
+        # Render markdown content
+        st.markdown(response)
 
         # Show SQL query if available
         if sql_query:
             with st.expander("📊 View SQL Query & Results"):
                 st.code(sql_query, language="sql")
-                
+
                 # Execute and show results
                 results = execute_sql_query(sql_query)
                 if results:
                     if isinstance(results, list) and len(results) > 0:
                         df = pd.DataFrame(results)
                         st.dataframe(df, use_container_width=True)
-                        st.markdown(f'<div class="success-box">✅ Retrieved {len(results)} rows</div>', unsafe_allow_html=True)
+                        st.markdown(f'<div class="success-box">✅ Retrieved {len(results)} rows</div>',
+                                    unsafe_allow_html=True)
                     elif isinstance(results, str):
                         st.error(results)
                     else:
