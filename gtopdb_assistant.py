@@ -16,7 +16,7 @@ from langgraph.graph import StateGraph, END
 
 # CrewAI imports
 from crewai import Agent, Task, Crew
-from crewai_tools import tool
+from crewai.tools import tool
 
 # Token limits
 MAX_USER_INPUT_TOKENS = 500
