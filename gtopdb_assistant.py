@@ -777,11 +777,10 @@ def generate_chat_title(first_message: str) -> str:
 
 @st.cache_resource
 def get_langchain_agent():
-    """Create LangChain SQL agent with comprehensive database schema knowledge"""
+    """Create LangChain SQL agent - cached for performance"""
     try:
         db_uri = f"postgresql://{st.secrets['connections']['postgresql']['username']}:{st.secrets['connections']['postgresql']['password']}@{st.secrets['connections']['postgresql']['host']}:{st.secrets['connections']['postgresql']['port']}/{st.secrets['connections']['postgresql']['database']}"
         
-        # Only include essential tables to reduce context size
         essential_tables = [
             'ligand', 'ligand_physchem', 'ligand_structure', 'interaction', 
             'object', 'species', 'reference', 'ligand2family', 'object2family',
@@ -794,7 +793,6 @@ def get_langchain_agent():
             sample_rows_in_table_info=1
         )
         
-        # Use GPT-4o (128k context) instead of GPT-4 (8k context)
         llm = ChatOpenAI(
             model="gpt-4o",
             temperature=0,
@@ -802,61 +800,9 @@ def get_langchain_agent():
             max_tokens=2000
         )
 
-        # Create custom system prompt with schema knowledge
-        system_prefix = f"""You are a GtoPdb (Guide to Pharmacology) database expert.
-
-CRITICAL DATABASE SCHEMA KNOWLEDGE:
-
-1. LIGAND PROPERTIES:
-   - Basic info: ligand table (ligand_id, name, approved, type)
-   - Molecular weight: ligand_physchem.molecular_weight
-   - Other physicochemical properties: ligand_physchem (h_bond_acceptors, h_bond_donors, lipinski_s_rule_of_five, etc.)
-   - Chemical structure: ligand_structure (smiles, inchi, inchikey)
-   - Join: ligand LEFT JOIN ligand_physchem USING(ligand_id)
-
-2. DRUG-TARGET INTERACTIONS:
-   - interaction table links ligand_id to object_id (target)
-   - Affinity: Use COALESCE(affinity_median, affinity_high, affinity_low) for affinity values
-   - Species: interaction.species_id links to species table
-   - References: interaction_affinity_refs links to reference table
-
-3. TARGETS (OBJECTS):
-   - object table has target info (object_id, name, type)
-   - Gene info: structural_info table (object_id links to object)
-   - Target families: object2family links to family table
-
-4. COMMON QUERIES:
-   - Ligands by molecular weight: SELECT l.*, lp.molecular_weight FROM ligand l JOIN ligand_physchem lp ON l.ligand_id=lp.ligand_id WHERE lp.molecular_weight > [value]
-   - Approved drugs: WHERE ligand.approved = true
-   - Drug-target interactions: JOIN interaction ON ligand.ligand_id = interaction.ligand_id JOIN object ON interaction.object_id = object.object_id
-
-OUTPUT FORMAT RULES (CRITICAL):
-- ALWAYS format your response in MARKDOWN
-- When returning lists of items, ALWAYS use a MARKDOWN TABLE
-- Include relevant columns (name, molecular_weight, type, etc.)
-- Add a brief summary before the table
-- Keep tables clean and readable
-- Use proper markdown table syntax with | and ---
-
-EXAMPLE OUTPUT FORMAT:
-Found 15 ligands with molecular weight > 500:
-
-| Ligand Name | Molecular Weight | Type | Approved |
-|-------------|------------------|------|----------|
-| Compound A | 523.4 | Small molecule | Yes |
-| Compound B | 601.2 | Natural product | No |
-
-Total: 15 ligands match the criteria.
-
-RULES:
-- ALWAYS LIMIT results to {MAX_QUERY_RESULTS} rows
-- Use specific column names, NOT SELECT *
-- JOIN ligand_physchem when querying molecular properties
-- Show the SQL query in your response
-- Format output as MARKDOWN TABLES"""
-
         toolkit = SQLDatabaseToolkit(db=db, llm=llm)
 
+        # NOTE: prefix param not supported in this LangChain version - inject schema via question
         agent = create_sql_agent(
             llm=llm,
             toolkit=toolkit,
@@ -864,8 +810,7 @@ RULES:
             verbose=True,
             handle_parsing_errors=True,
             max_iterations=5,
-            agent_executor_kwargs={"handle_parsing_errors": True},
-            prefix=system_prefix
+            agent_executor_kwargs={"handle_parsing_errors": True}
         )
 
         return agent, db
@@ -874,50 +819,119 @@ RULES:
         return None, None
 
 
+def detect_intent(message: str) -> str:
+    """
+    Classify user intent as:
+    - 'database' : needs a DB query (pharmacology data request)
+    - 'conversational': greeting, small talk, follow-up explanation, off-topic redirect
+    """
+    try:
+        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": """Classify the user message into one of two categories:
+- "database": User is asking for pharmacological data, drug info, ligand properties, targets, interactions, molecular weight, approved drugs, etc. Any question that requires querying a database.
+- "conversational": Greeting (hi, hello, hey), small talk, thank you, yes/no follow-ups, asking for explanation of a previous answer, or topics completely unrelated to pharmacology.
+
+Reply with ONLY one word: "database" or "conversational"."""},
+                {"role": "user", "content": message}
+            ],
+            max_tokens=5,
+            temperature=0
+        )
+        intent = response.choices[0].message.content.strip().lower()
+        return "database" if "database" in intent else "conversational"
+    except:
+        # If classification fails, default to database (safer)
+        return "database"
+
+
+def get_conversational_response(message: str, chat_history: List[Dict]) -> str:
+    """Handle greetings, small talk and off-topic messages in a friendly, focused way"""
+    try:
+        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        
+        recent_history = [
+            {"role": m["role"], "content": m["content"][:300]}
+            for m in chat_history[-4:]
+        ]
+        
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": """You are a friendly AI assistant specialising in the GtoPdb (Guide to Pharmacology) database.
+
+PERSONALITY:
+- Warm, professional and concise
+- Happy to exchange greetings and light small talk
+- Always bring the conversation back to pharmacology if given the chance
+
+RULES:
+- For greetings (hi, hello, hey, how are you): respond naturally and briefly, mention you're here to help with pharmacology data
+- For thank-you or follow-up questions about a previous answer: respond helpfully without querying the database
+- For topics COMPLETELY outside pharmacology (sport, politics, coding unrelated to the app, etc.): politely decline and redirect, e.g. "That's a bit outside my area! I'm best suited to help you explore pharmacology data. Ask me about ligands, drug targets, interactions, and more."
+- Keep responses SHORT (2-4 sentences max for small talk)
+- Use markdown when helpful (bold key terms, short bullet lists)"""},
+                *recent_history,
+                {"role": "user", "content": message}
+            ],
+            max_tokens=300,
+            temperature=0.7
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return "Hello! 👋 I'm here to help you explore the GtoPdb pharmacology database. Feel free to ask about ligands, drug targets, interactions, and more!"
+
+
 def query_with_langchain(question: str, chat_history: List[Dict]) -> tuple[str, Optional[str]]:
-    """Query using LangChain agent with token management"""
+    """Query using LangChain SQL agent - schema knowledge injected into question"""
     try:
         agent, db = get_langchain_agent()
         if not agent:
-            return "Error: Could not initialize LangChain agent", None
+            return "⚠️ Could not initialize LangChain agent. Please check the logs.", None
 
-        # Limit chat history to last N messages to save tokens
         recent_history = chat_history[-MAX_CHAT_HISTORY_MESSAGES:] if len(chat_history) > MAX_CHAT_HISTORY_MESSAGES else chat_history
-        context = "\n".join([f"{msg['role']}: {msg['content'][:200]}" for msg in recent_history])  # Truncate each message
+        context = "\n".join([f"{msg['role']}: {msg['content'][:200]}" for msg in recent_history])
 
-        full_question = f"""Previous conversation (recent):
+        full_question = f"""You are a GtoPdb pharmacology database expert. Answer the question below using SQL.
+
+DATABASE SCHEMA CHEAT-SHEET:
+- Molecular weight → ligand_physchem.molecular_weight (JOIN ligand ON ligand_id)
+- Approved drugs    → ligand.approved = true
+- Drug targets      → interaction table JOIN object (object_id) + ligand (ligand_id)
+- Affinity value    → COALESCE(i.affinity_median, i.affinity_high, i.affinity_low)
+- Target type       → object.type (e.g. 'GPCR', 'Enzyme', 'Transporter')
+- Lipinski rules    → ligand_physchem.lipinski_s_rule_of_five
+
+RULES:
+1. LIMIT all queries to {MAX_QUERY_RESULTS} rows
+2. Use specific columns, NOT SELECT *
+3. JOIN ligand_physchem for any molecular property
+4. Format your ENTIRE response as MARKDOWN with a TABLE for list results
+5. Include a 1-line summary before the table and key stats after
+
+Recent conversation:
 {context}
 
-Current question: {question}
-
-Important: 
-1. LIMIT query results to {MAX_QUERY_RESULTS} rows maximum
-2. Only select essential columns, not all columns with SELECT *
-3. Keep the response concise
-4. Show the SQL query you used"""
+Question: {question}"""
 
         response = agent.run(full_question)
 
-        # Try to extract SQL query from response
+        # Extract SQL query from response
         sql_query = None
         if "SELECT" in response.upper():
-            lines = response.split("\n")
-            for line in lines:
-                if "SELECT" in line.upper():
-                    # Try to extract the full query
-                    sql_start = response.upper().find("SELECT")
-                    sql_end = response.find(";", sql_start)
-                    if sql_end == -1:
-                        sql_end = len(response)
-                    sql_query = response[sql_start:sql_end].strip()
-                    # Add LIMIT if not present
-                    if "LIMIT" not in sql_query.upper():
-                        sql_query += f" LIMIT {MAX_QUERY_RESULTS}"
-                    break
+            sql_start = response.upper().find("SELECT")
+            sql_end = response.find(";", sql_start)
+            if sql_end == -1:
+                sql_end = len(response)
+            sql_query = response[sql_start:sql_end].strip()
+            if "LIMIT" not in sql_query.upper():
+                sql_query += f" LIMIT {MAX_QUERY_RESULTS}"
 
         return response, sql_query
     except Exception as e:
-        return f"Error: {str(e)}", None
+        return f"❌ Error: {str(e)}", None
 
 
 # CrewAI SQL Tool
@@ -933,23 +947,23 @@ def query_gtopdb_tool(query: str) -> str:
         Query results as a JSON string
     """
     conn = get_db_connection()
-    if conn:
-        try:
-            # Add LIMIT if not present
-            if "LIMIT" not in query.upper():
-                query = query.rstrip(";") + f" LIMIT {MAX_QUERY_RESULTS}"
-            
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute(query)
-            results = cur.fetchall()
-            cur.close()
-            
-            # Limit results
-            limited_results = results[:MAX_QUERY_RESULTS]
-            return json.dumps([dict(r) for r in limited_results], default=str)
-        except Exception as e:
-            return f"Query error: {str(e)}"
-    return "Database connection error"
+    if not conn:
+        return "Database connection error"
+    try:
+        # Add LIMIT if not present
+        if "LIMIT" not in query.upper():
+            query = query.rstrip(";") + f" LIMIT {MAX_QUERY_RESULTS}"
+        
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(query)
+        results = cur.fetchall()
+        cur.close()
+        return json.dumps([dict(r) for r in results[:MAX_QUERY_RESULTS]], default=str)
+    except Exception as e:
+        conn.rollback()
+        return f"Query error: {str(e)}"
+    finally:
+        conn.close()
 
 
 def query_with_crewai(question: str, chat_history: List[Dict]) -> tuple[str, Optional[str]]:
@@ -1335,130 +1349,116 @@ if not st.session_state.messages:
 # Display chat messages
 for idx, message in enumerate(st.session_state.messages):
     if message["role"] == "user":
-        st.markdown(f"""
-        <div class="chat-message user-message">
-            <div class="message-header">👤 You</div>
-            <div class="message-content">{message["content"]}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        with st.chat_message("user"):
+            st.markdown(message["content"])
     else:
-        agent_badge = f'<span class="agent-badge {message.get("agent_type", "").lower()}-badge">{message.get("agent_type", "Assistant")}</span>' if message.get("agent_type") else ""
-        
-        # Start the message container
-        st.markdown(f"""
-        <div class="chat-message assistant-message">
-            <div class="message-header">🤖 Assistant {agent_badge}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Render the content as markdown (supports tables)
-        st.markdown(message["content"])
+        with st.chat_message("assistant"):
+            agent_type = message.get("agent_type", "")
+            if agent_type:
+                badge_color = "#3b82f6" if agent_type == "LangChain" else "#8b5cf6"
+                st.markdown(
+                    f'<span style="background:{badge_color}22;color:{"#60a5fa" if agent_type=="LangChain" else "#a78bfa"};'
+                    f'border:1px solid {badge_color};border-radius:12px;padding:2px 10px;'
+                    f'font-size:0.75rem;font-weight:600;">{agent_type}</span>',
+                    unsafe_allow_html=True
+                )
+            st.markdown(message["content"])
 
-        # Show SQL query if available
-        if message.get("sql_query"):
-            with st.expander("📊 View SQL Query & Results"):
-                st.code(message["sql_query"], language="sql")
-                
-                # Execute and show results
-                results = execute_sql_query(message["sql_query"])
-                if results:
+            # Show SQL expander if available
+            if message.get("sql_query"):
+                with st.expander("📊 View SQL Query & Results"):
+                    st.code(message["sql_query"], language="sql")
+                    results = execute_sql_query(message["sql_query"])
                     if isinstance(results, list) and len(results) > 0:
-                        df = pd.DataFrame(results)
-                        st.dataframe(df, use_container_width=True)
-                        st.markdown(f'<div class="success-box">✅ Retrieved {len(results)} rows</div>', unsafe_allow_html=True)
+                        st.dataframe(pd.DataFrame(results), use_container_width=True)
+                        st.caption(f"✅ {len(results)} rows returned")
                     elif isinstance(results, str):
                         st.error(results)
                     else:
                         st.info("No results found")
 
 # Chat input
-if prompt := st.chat_input("💬 Ask about the GtoPdb database..."):
-    # Validate token count
+if prompt := st.chat_input("💬 Ask me about pharmacology, or just say hi!"):
+    # Token length guard
     token_count = count_tokens(prompt)
-    
     if token_count > MAX_USER_INPUT_TOKENS:
-        st.error(f"❌ Your message is too long ({token_count} tokens). Please keep it under {MAX_USER_INPUT_TOKENS} tokens (approximately {int(MAX_USER_INPUT_TOKENS / 1.3)} words).")
+        st.error(f"❌ Message too long ({token_count} tokens). Please keep it under {MAX_USER_INPUT_TOKENS} tokens (~{int(MAX_USER_INPUT_TOKENS / 1.3)} words).")
         st.stop()
     
-    # Create session if this is the very first message ever
+    # Create session on first message
     if not st.session_state.current_session_id:
         st.session_state.current_session_id = create_chat_session(st.session_state.user['user_id'])
         st.session_state.messages = []
     
-    # Check if this is the first message in the session
     is_first_message = len(st.session_state.messages) == 0
-    
-    # Add user message
+
+    # Add and show user message
     st.session_state.messages.append({"role": "user", "content": prompt})
-    save_chat_message(
-        st.session_state.current_session_id,
-        "user",
-        prompt
-    )
+    save_chat_message(st.session_state.current_session_id, "user", prompt)
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-    # Display user message immediately
-    st.markdown(f"""
-    <div class="chat-message user-message">
-        <div class="message-header">👤 You</div>
-        <div class="message-content">{prompt}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Generate title for first message
+    # Generate title on first message
     if is_first_message:
-        with st.spinner("Generating chat title..."):
+        with st.spinner("Naming chat..."):
             title = generate_chat_title(prompt)
             update_session_title(st.session_state.current_session_id, title)
 
-    # Generate response
-    with st.spinner(f"🤖 {st.session_state.agent_type} agent is thinking..."):
-        # Query based on selected agent
-        if st.session_state.agent_type == "LangChain":
-            response, sql_query = query_with_langchain(prompt, st.session_state.messages)
+    # ── Intent detection ──────────────────────────────────────────────
+    intent = detect_intent(prompt)
+
+    with st.chat_message("assistant"):
+        agent_type = st.session_state.agent_type
+        badge_color = "#3b82f6" if agent_type == "LangChain" else "#8b5cf6"
+        text_color  = "#60a5fa" if agent_type == "LangChain" else "#a78bfa"
+        st.markdown(
+            f'<span style="background:{badge_color}22;color:{text_color};'
+            f'border:1px solid {badge_color};border-radius:12px;padding:2px 10px;'
+            f'font-size:0.75rem;font-weight:600;">{agent_type}</span>',
+            unsafe_allow_html=True
+        )
+
+        if intent == "conversational":
+            # ── Friendly / small-talk path – no DB call ──────────────
+            with st.spinner("Thinking..."):
+                response = get_conversational_response(prompt, st.session_state.messages)
+                sql_query = None
+            st.markdown(response)
+
         else:
-            response, sql_query = query_with_crewai(prompt, st.session_state.messages)
+            # ── Database query path ───────────────────────────────────
+            with st.spinner(f"🤖 {agent_type} agent querying the database..."):
+                if agent_type == "LangChain":
+                    response, sql_query = query_with_langchain(prompt, st.session_state.messages)
+                else:
+                    response, sql_query = query_with_crewai(prompt, st.session_state.messages)
+            st.markdown(response)
 
-        # Display response with agent badge
-        agent_badge = f'<span class="agent-badge {st.session_state.agent_type.lower()}-badge">{st.session_state.agent_type}</span>'
-        st.markdown(f"""
-        <div class="chat-message assistant-message">
-            <div class="message-header">🤖 Assistant {agent_badge}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Render markdown content
-        st.markdown(response)
-
-        # Show SQL query if available
-        if sql_query:
-            with st.expander("📊 View SQL Query & Results"):
-                st.code(sql_query, language="sql")
-                
-                # Execute and show results
-                results = execute_sql_query(sql_query)
-                if results:
+            if sql_query:
+                with st.expander("📊 View SQL & Raw Results"):
+                    st.code(sql_query, language="sql")
+                    results = execute_sql_query(sql_query)
                     if isinstance(results, list) and len(results) > 0:
-                        df = pd.DataFrame(results)
-                        st.dataframe(df, use_container_width=True)
-                        st.markdown(f'<div class="success-box">✅ Retrieved {len(results)} rows</div>', unsafe_allow_html=True)
+                        st.dataframe(pd.DataFrame(results), use_container_width=True)
+                        st.caption(f"✅ {len(results)} rows returned")
                     elif isinstance(results, str):
                         st.error(results)
                     else:
                         st.info("No results found")
 
-    # Save assistant message
+    # Persist assistant message
     st.session_state.messages.append({
         "role": "assistant",
         "content": response,
-        "agent_type": st.session_state.agent_type,
-        "sql_query": sql_query
+        "agent_type": agent_type,
+        "sql_query": sql_query if intent != "conversational" else None
     })
     save_chat_message(
         st.session_state.current_session_id,
         "assistant",
         response,
-        st.session_state.agent_type,
-        sql_query
+        agent_type,
+        sql_query if intent != "conversational" else None
     )
 
     st.rerun()
