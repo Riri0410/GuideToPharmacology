@@ -10,12 +10,9 @@ import pandas as pd
 from typing import Optional, List, Dict, Any
 import tiktoken
 
-# LangChain imports - using langchain_community (updated paths)
-from langchain_openai import ChatOpenAI
-from langchain.agents import create_sql_agent
-from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
-from langchain_community.utilities import SQLDatabase
-from langchain.agents.agent_types import AgentType
+# LangGraph imports
+from typing import TypedDict, Optional as TOptional, Literal
+from langgraph.graph import StateGraph, END
 
 # CrewAI imports
 from crewai import Agent, Task, Crew
@@ -775,163 +772,240 @@ def generate_chat_title(first_message: str) -> str:
         return "New Chat"
 
 
+########################################################################
+# ── LangGraph: Conditional Pharmacology Agent ────────────────────── #
+########################################################################
+
+SCHEMA_CHEATSHEET = f"""
+GTOPDB SCHEMA (critical — use for every SQL query):
+- ligand            : ligand_id, name, type, approved
+- ligand_physchem   : ligand_id(fk), molecular_weight, h_bond_acceptors,
+                      h_bond_donors, lipinski_s_rule_of_five, xlogp
+- ligand_structure  : ligand_id(fk), smiles, inchi, inchikey
+- interaction       : interaction_id, ligand_id(fk), object_id(fk),
+                      species_id(fk), type, action,
+                      affinity_units,
+                      affinity_median, affinity_high, affinity_low
+                      → affinity = COALESCE(affinity_median, affinity_high, affinity_low)
+- object            : object_id, name, type  (type values: GPCR, Enzyme,
+                      Transporter, Ion channel, Nuclear receptor, etc.)
+- species           : species_id, name, scientific_name, short_name
+- reference         : reference_id, title, authors, year, pubmed_id
+- ligand2family     : ligand_id, family_id
+- object2family     : object_id, family_id
+- family            : family_id, name, type
+
+KEY JOINS:
+  Molecular weight   → JOIN ligand_physchem lp ON lp.ligand_id = l.ligand_id
+  Approved drugs     → WHERE l.approved = true
+  Drug-target        → JOIN interaction i ON i.ligand_id = l.ligand_id
+                        JOIN object o ON o.object_id = i.object_id
+
+LIMIT every query to {MAX_QUERY_RESULTS} rows. Never SELECT *.
+"""
+
+SYSTEM_PERSONA = """You are a friendly, knowledgeable assistant for the GtoPdb 
+(IUPHAR/BPS Guide to Pharmacology) database.
+- For greetings / small talk: respond warmly and briefly; invite a pharmacology question.
+- For questions about pharmacology concepts: answer from knowledge, no DB needed.
+- For requests outside pharmacology (sport, politics, etc.): politely redirect.
+- Never make up data — rely on the database for factual numbers.
+"""
+
+class GtoPdbState(TypedDict):
+    question: str
+    chat_history: list
+    intent: str                    # "database" | "conversational"
+    sql_query: TOptional[str]
+    db_results: TOptional[str]
+    response: TOptional[str]
+
+
+def _openai_client() -> OpenAI:
+    return OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+
+# ── Node 1: classify intent ─────────────────────────────────────────
+def node_classify(state: GtoPdbState) -> GtoPdbState:
+    client = _openai_client()
+    resp = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": (
+                "Classify the user message into ONE word:\n"
+                "  'database'      — needs pharmacology data from a DB "
+                "(ligands, drugs, MW, targets, interactions, affinities…)\n"
+                "  'conversational'— greeting, thanks, concept explanation, "
+                "follow-up, or off-topic.\n"
+                "Reply with ONLY that one word."
+            )},
+            {"role": "user", "content": state["question"]}
+        ],
+        max_tokens=5,
+        temperature=0
+    )
+    raw = resp.choices[0].message.content.strip().lower()
+    state["intent"] = "database" if "database" in raw else "conversational"
+    return state
+
+
+# ── Node 2a: conversational / concept response ───────────────────────
+def node_converse(state: GtoPdbState) -> GtoPdbState:
+    client = _openai_client()
+    history = [
+        {"role": m["role"], "content": m["content"][:300]}
+        for m in state["chat_history"][-4:]
+    ]
+    resp = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": SYSTEM_PERSONA},
+            *history,
+            {"role": "user", "content": state["question"]}
+        ],
+        max_tokens=400,
+        temperature=0.7
+    )
+    state["response"] = resp.choices[0].message.content.strip()
+    state["sql_query"] = None
+    return state
+
+
+# ── Node 2b: generate SQL ────────────────────────────────────────────
+def node_generate_sql(state: GtoPdbState) -> GtoPdbState:
+    client = _openai_client()
+    history = "\n".join(
+        f"{m['role']}: {m['content'][:200]}"
+        for m in state["chat_history"][-MAX_CHAT_HISTORY_MESSAGES:]
+    )
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": (
+                f"You are a PostgreSQL expert for the GtoPdb database.\n"
+                f"{SCHEMA_CHEATSHEET}\n"
+                "Return ONLY a single valid SQL SELECT statement — "
+                "no explanation, no markdown, no semicolons."
+            )},
+            {"role": "user", "content": (
+                f"Recent conversation:\n{history}\n\n"
+                f"Generate SQL to answer: {state['question']}"
+            )}
+        ],
+        max_tokens=500,
+        temperature=0
+    )
+    sql = resp.choices[0].message.content.strip()
+    # Strip markdown code fences if model added them
+    sql = sql.replace("```sql", "").replace("```", "").strip()
+    if "LIMIT" not in sql.upper():
+        sql += f" LIMIT {MAX_QUERY_RESULTS}"
+    state["sql_query"] = sql
+    return state
+
+
+# ── Node 3: execute SQL ──────────────────────────────────────────────
+def node_execute_sql(state: GtoPdbState) -> GtoPdbState:
+    sql = state.get("sql_query", "")
+    if not sql:
+        state["db_results"] = "[]"
+        return state
+    conn = get_db_connection()
+    if not conn:
+        state["db_results"] = "ERROR: Could not connect to database"
+        return state
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(sql)
+        rows = cur.fetchall()
+        cur.close()
+        state["db_results"] = json.dumps(
+            [dict(r) for r in rows[:MAX_QUERY_RESULTS]], default=str
+        )
+    except Exception as e:
+        conn.rollback()
+        state["db_results"] = f"ERROR: {e}"
+    finally:
+        conn.close()
+    return state
+
+
+# ── Node 4: format response as markdown ─────────────────────────────
+def node_format_response(state: GtoPdbState) -> GtoPdbState:
+    client = _openai_client()
+    db_results = state.get("db_results", "[]")
+
+    if db_results.startswith("ERROR"):
+        state["response"] = (
+            f"⚠️ I ran this query but got an error:\n\n"
+            f"```sql\n{state['sql_query']}\n```\n\n"
+            f"**Error:** {db_results}"
+        )
+        return state
+
+    resp = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": (
+                "You are a pharmacology data analyst.\n"
+                "Format the SQL results as clean MARKDOWN:\n"
+                "1. One-sentence summary\n"
+                "2. Markdown TABLE with clear column headers and units\n"
+                "3. 2-3 bullet key findings (bold important values)\n"
+                "Never repeat raw JSON. If results are empty say so clearly."
+            )},
+            {"role": "user", "content": (
+                f"Question: {state['question']}\n\n"
+                f"SQL results (JSON):\n{db_results}"
+            )}
+        ],
+        max_tokens=1500,
+        temperature=0.3
+    )
+    state["response"] = resp.choices[0].message.content.strip()
+    return state
+
+
+# ── Router ────────────────────────────────────────────────────────────
+def route_intent(state: GtoPdbState) -> Literal["node_converse", "node_generate_sql"]:
+    return "node_converse" if state["intent"] == "conversational" else "node_generate_sql"
+
+
+# ── Build & cache the graph ──────────────────────────────────────────
 @st.cache_resource
-def get_langchain_agent():
-    """Create LangChain SQL agent - cached for performance"""
+def build_langgraph():
+    g = StateGraph(GtoPdbState)
+    g.add_node("classify",         node_classify)
+    g.add_node("node_converse",    node_converse)
+    g.add_node("node_generate_sql", node_generate_sql)
+    g.add_node("node_execute_sql", node_execute_sql)
+    g.add_node("node_format",      node_format_response)
+
+    g.set_entry_point("classify")
+    g.add_conditional_edges("classify", route_intent)
+    g.add_edge("node_converse",      END)
+    g.add_edge("node_generate_sql",  "node_execute_sql")
+    g.add_edge("node_execute_sql",   "node_format")
+    g.add_edge("node_format",        END)
+
+    return g.compile()
+
+
+def query_with_langgraph(question: str, chat_history: List[Dict]) -> tuple[str, TOptional[str]]:
+    """Run the LangGraph pipeline and return (markdown_response, sql_query_or_none)"""
     try:
-        db_uri = f"postgresql://{st.secrets['connections']['postgresql']['username']}:{st.secrets['connections']['postgresql']['password']}@{st.secrets['connections']['postgresql']['host']}:{st.secrets['connections']['postgresql']['port']}/{st.secrets['connections']['postgresql']['database']}"
-        
-        essential_tables = [
-            'ligand', 'ligand_physchem', 'ligand_structure', 'interaction', 
-            'object', 'species', 'reference', 'ligand2family', 'object2family',
-            'ligand2synonym', 'interaction_affinity_refs'
-        ]
-        
-        db = SQLDatabase.from_uri(
-            db_uri,
-            include_tables=essential_tables,
-            sample_rows_in_table_info=1
-        )
-        
-        llm = ChatOpenAI(
-            model="gpt-4o",
-            temperature=0,
-            api_key=st.secrets["OPENAI_API_KEY"],
-            max_tokens=2000
-        )
-
-        toolkit = SQLDatabaseToolkit(db=db, llm=llm)
-
-        # NOTE: prefix param not supported in this LangChain version - inject schema via question
-        agent = create_sql_agent(
-            llm=llm,
-            toolkit=toolkit,
-            agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-            verbose=True,
-            handle_parsing_errors=True,
-            max_iterations=5,
-            agent_executor_kwargs={"handle_parsing_errors": True}
-        )
-
-        return agent, db
+        graph = build_langgraph()
+        final = graph.invoke({
+            "question":     question,
+            "chat_history": chat_history,
+            "intent":       "",
+            "sql_query":    None,
+            "db_results":   None,
+            "response":     None,
+        })
+        return final.get("response", "⚠️ No response generated."), final.get("sql_query")
     except Exception as e:
-        st.error(f"Error creating LangChain agent: {e}")
-        return None, None
-
-
-def detect_intent(message: str) -> str:
-    """
-    Classify user intent as:
-    - 'database' : needs a DB query (pharmacology data request)
-    - 'conversational': greeting, small talk, follow-up explanation, off-topic redirect
-    """
-    try:
-        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": """Classify the user message into one of two categories:
-- "database": User is asking for pharmacological data, drug info, ligand properties, targets, interactions, molecular weight, approved drugs, etc. Any question that requires querying a database.
-- "conversational": Greeting (hi, hello, hey), small talk, thank you, yes/no follow-ups, asking for explanation of a previous answer, or topics completely unrelated to pharmacology.
-
-Reply with ONLY one word: "database" or "conversational"."""},
-                {"role": "user", "content": message}
-            ],
-            max_tokens=5,
-            temperature=0
-        )
-        intent = response.choices[0].message.content.strip().lower()
-        return "database" if "database" in intent else "conversational"
-    except:
-        # If classification fails, default to database (safer)
-        return "database"
-
-
-def get_conversational_response(message: str, chat_history: List[Dict]) -> str:
-    """Handle greetings, small talk and off-topic messages in a friendly, focused way"""
-    try:
-        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-        
-        recent_history = [
-            {"role": m["role"], "content": m["content"][:300]}
-            for m in chat_history[-4:]
-        ]
-        
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": """You are a friendly AI assistant specialising in the GtoPdb (Guide to Pharmacology) database.
-
-PERSONALITY:
-- Warm, professional and concise
-- Happy to exchange greetings and light small talk
-- Always bring the conversation back to pharmacology if given the chance
-
-RULES:
-- For greetings (hi, hello, hey, how are you): respond naturally and briefly, mention you're here to help with pharmacology data
-- For thank-you or follow-up questions about a previous answer: respond helpfully without querying the database
-- For topics COMPLETELY outside pharmacology (sport, politics, coding unrelated to the app, etc.): politely decline and redirect, e.g. "That's a bit outside my area! I'm best suited to help you explore pharmacology data. Ask me about ligands, drug targets, interactions, and more."
-- Keep responses SHORT (2-4 sentences max for small talk)
-- Use markdown when helpful (bold key terms, short bullet lists)"""},
-                *recent_history,
-                {"role": "user", "content": message}
-            ],
-            max_tokens=300,
-            temperature=0.7
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return "Hello! 👋 I'm here to help you explore the GtoPdb pharmacology database. Feel free to ask about ligands, drug targets, interactions, and more!"
-
-
-def query_with_langchain(question: str, chat_history: List[Dict]) -> tuple[str, Optional[str]]:
-    """Query using LangChain SQL agent - schema knowledge injected into question"""
-    try:
-        agent, db = get_langchain_agent()
-        if not agent:
-            return "⚠️ Could not initialize LangChain agent. Please check the logs.", None
-
-        recent_history = chat_history[-MAX_CHAT_HISTORY_MESSAGES:] if len(chat_history) > MAX_CHAT_HISTORY_MESSAGES else chat_history
-        context = "\n".join([f"{msg['role']}: {msg['content'][:200]}" for msg in recent_history])
-
-        full_question = f"""You are a GtoPdb pharmacology database expert. Answer the question below using SQL.
-
-DATABASE SCHEMA CHEAT-SHEET:
-- Molecular weight → ligand_physchem.molecular_weight (JOIN ligand ON ligand_id)
-- Approved drugs    → ligand.approved = true
-- Drug targets      → interaction table JOIN object (object_id) + ligand (ligand_id)
-- Affinity value    → COALESCE(i.affinity_median, i.affinity_high, i.affinity_low)
-- Target type       → object.type (e.g. 'GPCR', 'Enzyme', 'Transporter')
-- Lipinski rules    → ligand_physchem.lipinski_s_rule_of_five
-
-RULES:
-1. LIMIT all queries to {MAX_QUERY_RESULTS} rows
-2. Use specific columns, NOT SELECT *
-3. JOIN ligand_physchem for any molecular property
-4. Format your ENTIRE response as MARKDOWN with a TABLE for list results
-5. Include a 1-line summary before the table and key stats after
-
-Recent conversation:
-{context}
-
-Question: {question}"""
-
-        response = agent.run(full_question)
-
-        # Extract SQL query from response
-        sql_query = None
-        if "SELECT" in response.upper():
-            sql_start = response.upper().find("SELECT")
-            sql_end = response.find(";", sql_start)
-            if sql_end == -1:
-                sql_end = len(response)
-            sql_query = response[sql_start:sql_end].strip()
-            if "LIMIT" not in sql_query.upper():
-                sql_query += f" LIMIT {MAX_QUERY_RESULTS}"
-
-        return response, sql_query
-    except Exception as e:
-        return f"❌ Error: {str(e)}", None
+        return f"❌ LangGraph error: {e}", None
 
 
 # CrewAI SQL Tool
@@ -1153,7 +1227,7 @@ if 'current_session_id' not in st.session_state:
 if 'messages' not in st.session_state:
     st.session_state.messages = []
 if 'agent_type' not in st.session_state:
-    st.session_state.agent_type = "LangChain"
+    st.session_state.agent_type = "LangGraph"
 
 # Initialize database
 init_database()
@@ -1242,11 +1316,11 @@ with st.sidebar:
     st.markdown("### 🤖 AI Agent")
     st.session_state.agent_type = st.selectbox(
         "Select Agent",
-        ["LangChain", "CrewAI"],
-        help="LangChain: Fast SQL agent | CrewAI: Multi-agent system with PostgreSQL tools"
+        ["LangGraph", "CrewAI"],
+        help="LangGraph: Smart conditional agent (recommended) | CrewAI: Multi-agent system"
     )
     
-    agent_badge_class = "langchain-badge" if st.session_state.agent_type == "LangChain" else "crewai-badge"
+    agent_badge_class = "langchain-badge" if st.session_state.agent_type == "LangGraph" else "crewai-badge"
     st.markdown(f'<div class="agent-badge {agent_badge_class}">Using {st.session_state.agent_type}</div>', unsafe_allow_html=True)
 
     st.markdown("---")
@@ -1355,9 +1429,9 @@ for idx, message in enumerate(st.session_state.messages):
         with st.chat_message("assistant"):
             agent_type = message.get("agent_type", "")
             if agent_type:
-                badge_color = "#3b82f6" if agent_type == "LangChain" else "#8b5cf6"
+                badge_color = "#3b82f6" if agent_type == "LangGraph" else "#8b5cf6"
                 st.markdown(
-                    f'<span style="background:{badge_color}22;color:{"#60a5fa" if agent_type=="LangChain" else "#a78bfa"};'
+                    f'<span style="background:{badge_color}22;color:{"#60a5fa" if agent_type=="LangGraph" else "#a78bfa"};'
                     f'border:1px solid {badge_color};border-radius:12px;padding:2px 10px;'
                     f'font-size:0.75rem;font-weight:600;">{agent_type}</span>',
                     unsafe_allow_html=True
@@ -1409,8 +1483,8 @@ if prompt := st.chat_input("💬 Ask me about pharmacology, or just say hi!"):
 
     with st.chat_message("assistant"):
         agent_type = st.session_state.agent_type
-        badge_color = "#3b82f6" if agent_type == "LangChain" else "#8b5cf6"
-        text_color  = "#60a5fa" if agent_type == "LangChain" else "#a78bfa"
+        badge_color = "#3b82f6" if agent_type == "LangGraph" else "#8b5cf6"
+        text_color  = "#60a5fa" if agent_type == "LangGraph" else "#a78bfa"
         st.markdown(
             f'<span style="background:{badge_color}22;color:{text_color};'
             f'border:1px solid {badge_color};border-radius:12px;padding:2px 10px;'
@@ -1428,8 +1502,8 @@ if prompt := st.chat_input("💬 Ask me about pharmacology, or just say hi!"):
         else:
             # ── Database query path ───────────────────────────────────
             with st.spinner(f"🤖 {agent_type} agent querying the database..."):
-                if agent_type == "LangChain":
-                    response, sql_query = query_with_langchain(prompt, st.session_state.messages)
+                if agent_type == "LangGraph":
+                    response, sql_query = query_with_langgraph(prompt, st.session_state.messages)
                 else:
                     response, sql_query = query_with_crewai(prompt, st.session_state.messages)
             st.markdown(response)
@@ -1467,7 +1541,7 @@ if prompt := st.chat_input("💬 Ask me about pharmacology, or just say hi!"):
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #94a3b8; padding: 2rem;">
-    <p><strong>🧬 GtoPdb AI Assistant</strong> | Powered by OpenAI, LangChain & CrewAI</p>
+    <p><strong>🧬 GtoPdb AI Assistant</strong> | Powered by OpenAI, LangGraph & CrewAI</p>
     <p style="font-size: 0.9rem;">IUPHAR/BPS Guide to Pharmacology Database</p>
     <p style="font-size: 0.8rem; margin-top: 1rem;">
         <a href="https://www.guidetopharmacology.org" target="_blank" style="color: #6366f1;">Visit GtoPdb</a> | 
