@@ -1006,21 +1006,78 @@ def node_converse(state: GtoPdbState) -> GtoPdbState:
     return state
 
 
-# ── Node 2b: generate SQL ────────────────────────────────────────────
+# ── Live schema introspection (cached) ───────────────────────────────
+@st.cache_resource
+def get_live_schema() -> str:
+    """
+    Query information_schema at startup to get the REAL columns for every table.
+    Cached so it runs once per deployment. Returns a compact schema string.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return ""   # fall back to static cheatsheet
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT table_name, column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+            ORDER BY table_name, ordinal_position
+        """)
+        rows = cur.fetchall()
+        cur.close()
+
+        # Group by table
+        tables: dict = {}
+        for table, col, dtype in rows:
+            tables.setdefault(table, []).append(f"{col}({dtype[:7]})")
+
+        lines = ["=== LIVE DATABASE SCHEMA (verified column names) ==="]
+        for tname, cols in sorted(tables.items()):
+            lines.append(f"TABLE {tname}: {', '.join(cols)}")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+    finally:
+        conn.close()
+
+
+# ── Node 2b: generate SQL using LIVE schema ──────────────────────────
 def node_generate_sql(state: GtoPdbState) -> GtoPdbState:
     client = _openai_client()
     history = "\n".join(
         f"{m['role']}: {m['content'][:200]}"
         for m in state["chat_history"][-MAX_CHAT_HISTORY_MESSAGES:]
     )
+
+    # Use live schema if available, otherwise fall back to static cheatsheet
+    live = get_live_schema()
+    schema_block = live if live else SCHEMA_CHEATSHEET
+
+    # Always append the critical rules regardless of schema source
+    rules = f"""
+=== CRITICAL RULES — MUST FOLLOW ===
+1. Use ONLY column names that appear in the schema above — never invent columns.
+2. LIMIT every query to {MAX_QUERY_RESULTS} rows. Never SELECT *.
+3. Use ILIKE for all name/synonym searches (case-insensitive).
+4. For ligand lookup: WHERE l.name ILIKE '%name%'
+   OR via synonym: JOIN ligand2synonym ls2 ON ls2.ligand_id=l.ligand_id WHERE ls2.synonym ILIKE '%name%'
+5. Affinity: CASE WHEN i.affinity_median IS NOT NULL THEN i.affinity_median
+             WHEN i.affinity_high IS NOT NULL THEN i.affinity_high
+             ELSE i.affinity_low END AS affinity
+6. For diseases: query the disease table — NOT family.
+7. interaction.object_id may be NULL when target_ligand_id is set.
+"""
+
     resp = client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": (
-                f"You are a PostgreSQL expert for the GtoPdb database.\n"
-                f"{SCHEMA_CHEATSHEET}\n"
+                f"You are a PostgreSQL expert for the GtoPdb database.\n\n"
+                f"{schema_block}\n\n"
+                f"{rules}\n"
                 "Return ONLY a single valid SQL SELECT statement — "
-                "no explanation, no markdown, no semicolons."
+                "no explanation, no markdown fences, no semicolons."
             )},
             {"role": "user", "content": (
                 f"Recent conversation:\n{history}\n\n"
@@ -1031,8 +1088,7 @@ def node_generate_sql(state: GtoPdbState) -> GtoPdbState:
         temperature=0
     )
     sql = resp.choices[0].message.content.strip()
-    # Strip markdown code fences if model added them
-    sql = sql.replace("```sql", "").replace("```", "").strip()
+    sql = sql.replace("```sql", "").replace("```", "").strip().rstrip(";")
     if "LIMIT" not in sql.upper():
         sql += f" LIMIT {MAX_QUERY_RESULTS}"
     state["sql_query"] = sql
@@ -1071,18 +1127,21 @@ def node_execute_sql(state: GtoPdbState) -> GtoPdbState:
     if error and ("column" in error.lower() or "does not exist" in error.lower()):
         try:
             client = _openai_client()
+            live = get_live_schema()
+            schema_block = live if live else SCHEMA_CHEATSHEET
             fix_resp = client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
                     {"role": "system", "content": (
-                        f"You are a PostgreSQL expert. Fix the SQL query below.\n"
-                        f"The error was: {error}\n\n"
-                        f"{SCHEMA_CHEATSHEET}\n"
+                        f"You are a PostgreSQL expert. Fix the broken SQL query.\n"
+                        f"Error: {error}\n\n"
+                        f"{schema_block}\n\n"
+                        "CRITICAL: Use ONLY column names that appear in the schema above.\n"
                         "Return ONLY the corrected SQL — no explanation, no markdown, no semicolons."
                     )},
                     {"role": "user", "content": f"Broken SQL:\n{sql}"}
                 ],
-                max_tokens=400,
+                max_tokens=600,
                 temperature=0
             )
             fixed_sql = fix_resp.choices[0].message.content.strip()
