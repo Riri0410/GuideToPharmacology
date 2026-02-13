@@ -1458,33 +1458,32 @@ if prompt := st.chat_input("💬 Ask me about pharmacology, or just say hi!"):
     if token_count > MAX_USER_INPUT_TOKENS:
         st.error(f"❌ Message too long ({token_count} tokens). Please keep it under {MAX_USER_INPUT_TOKENS} tokens (~{int(MAX_USER_INPUT_TOKENS / 1.3)} words).")
         st.stop()
-    
+
     # Create session on first message
     if not st.session_state.current_session_id:
         st.session_state.current_session_id = create_chat_session(st.session_state.user['user_id'])
         st.session_state.messages = []
-    
+
     is_first_message = len(st.session_state.messages) == 0
 
-    # Add and show user message
+    # Show & save user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     save_chat_message(st.session_state.current_session_id, "user", prompt)
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Generate title on first message
+    # Auto-name the chat on first message
     if is_first_message:
         with st.spinner("Naming chat..."):
             title = generate_chat_title(prompt)
             update_session_title(st.session_state.current_session_id, title)
 
-    # ── Intent detection ──────────────────────────────────────────────
-    intent = detect_intent(prompt)
+    # ── Generate response ─────────────────────────────────────────────
+    agent_type = st.session_state.agent_type
+    badge_color = "#3b82f6" if agent_type == "LangGraph" else "#8b5cf6"
+    text_color  = "#60a5fa" if agent_type == "LangGraph" else "#a78bfa"
 
     with st.chat_message("assistant"):
-        agent_type = st.session_state.agent_type
-        badge_color = "#3b82f6" if agent_type == "LangGraph" else "#8b5cf6"
-        text_color  = "#60a5fa" if agent_type == "LangGraph" else "#a78bfa"
         st.markdown(
             f'<span style="background:{badge_color}22;color:{text_color};'
             f'border:1px solid {badge_color};border-radius:12px;padding:2px 10px;'
@@ -1492,47 +1491,41 @@ if prompt := st.chat_input("💬 Ask me about pharmacology, or just say hi!"):
             unsafe_allow_html=True
         )
 
-        if intent == "conversational":
-            # ── Friendly / small-talk path – no DB call ──────────────
-            with st.spinner("Thinking..."):
-                response = get_conversational_response(prompt, st.session_state.messages)
-                sql_query = None
-            st.markdown(response)
+        with st.spinner("Thinking..."):
+            if agent_type == "LangGraph":
+                # LangGraph handles routing internally (conversational vs DB)
+                response, sql_query = query_with_langgraph(prompt, st.session_state.messages)
+            else:
+                # CrewAI always queries the database
+                response, sql_query = query_with_crewai(prompt, st.session_state.messages)
 
-        else:
-            # ── Database query path ───────────────────────────────────
-            with st.spinner(f"🤖 {agent_type} agent querying the database..."):
-                if agent_type == "LangGraph":
-                    response, sql_query = query_with_langgraph(prompt, st.session_state.messages)
+        st.markdown(response)
+
+        if sql_query:
+            with st.expander("📊 View SQL & Raw Results"):
+                st.code(sql_query, language="sql")
+                results = execute_sql_query(sql_query)
+                if isinstance(results, list) and len(results) > 0:
+                    st.dataframe(pd.DataFrame(results), use_container_width=True)
+                    st.caption(f"✅ {len(results)} rows returned")
+                elif isinstance(results, str):
+                    st.error(results)
                 else:
-                    response, sql_query = query_with_crewai(prompt, st.session_state.messages)
-            st.markdown(response)
-
-            if sql_query:
-                with st.expander("📊 View SQL & Raw Results"):
-                    st.code(sql_query, language="sql")
-                    results = execute_sql_query(sql_query)
-                    if isinstance(results, list) and len(results) > 0:
-                        st.dataframe(pd.DataFrame(results), use_container_width=True)
-                        st.caption(f"✅ {len(results)} rows returned")
-                    elif isinstance(results, str):
-                        st.error(results)
-                    else:
-                        st.info("No results found")
+                    st.info("No results found")
 
     # Persist assistant message
     st.session_state.messages.append({
         "role": "assistant",
         "content": response,
         "agent_type": agent_type,
-        "sql_query": sql_query if intent != "conversational" else None
+        "sql_query": sql_query
     })
     save_chat_message(
         st.session_state.current_session_id,
         "assistant",
         response,
         agent_type,
-        sql_query if intent != "conversational" else None
+        sql_query
     )
 
     st.rerun()
