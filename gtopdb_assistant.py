@@ -777,31 +777,166 @@ def generate_chat_title(first_message: str) -> str:
 ########################################################################
 
 SCHEMA_CHEATSHEET = f"""
-GTOPDB SCHEMA (critical — use for every SQL query):
-- ligand            : ligand_id, name, type, approved
-- ligand_physchem   : ligand_id(fk), molecular_weight, h_bond_acceptors,
-                      h_bond_donors, lipinski_s_rule_of_five, xlogp
-- ligand_structure  : ligand_id(fk), smiles, inchi, inchikey
-- interaction       : interaction_id, ligand_id(fk), object_id(fk),
-                      species_id(fk), type, action,
-                      affinity_units,
-                      affinity_median, affinity_high, affinity_low
-                      → affinity = COALESCE(affinity_median, affinity_high, affinity_low)
-- object            : object_id, name, type  (type values: GPCR, Enzyme,
-                      Transporter, Ion channel, Nuclear receptor, etc.)
-- species           : species_id, name, scientific_name, short_name
-- reference         : reference_id, title, authors, year, pubmed_id
-- ligand2family     : ligand_id, family_id
-- object2family     : object_id, family_id
-- family            : family_id, name, type
+=== GTOPDB COMPLETE DATABASE SCHEMA ===
+(Use EXACT column names. Never guess column names not listed here.)
 
-KEY JOINS:
-  Molecular weight   → JOIN ligand_physchem lp ON lp.ligand_id = l.ligand_id
-  Approved drugs     → WHERE l.approved = true
-  Drug-target        → JOIN interaction i ON i.ligand_id = l.ligand_id
-                        JOIN object o ON o.object_id = i.object_id
+--- LIGANDS ---
+TABLE ligand:
+  ligand_id(PK), name, type, approved(bool), radioactive(bool), labelled(bool),
+  in_gtip(bool, immunopharmacology), in_gtmp(bool, antimalarial),
+  immuno_comments, gtmp_comments, general_comments
 
-LIMIT every query to {MAX_QUERY_RESULTS} rows. Never SELECT *.
+TABLE ligand_physchem:
+  ligand_id(FK), molecular_weight, molecular_formula, ro3_compliant(bool),
+  ro5_violations(int, 0=passes all Lipinski rules),
+  alogp, hba(H-bond acceptors), hbd(H-bond donors),
+  psa(polar surface area), rotatable_bonds, smiles, species
+  !! USE hba/hbd — NEVER h_bond_acceptors/h_bond_donors !!
+
+TABLE ligand_structure:
+  ligand_id(FK), smiles, inchi, inchikey
+
+TABLE ligand2synonym:
+  ligand_id(FK), synonym
+
+TABLE ligand2family:
+  ligand_id(FK), family_id(FK)
+
+TABLE peptide:
+  ligand_id(FK), one_letter_seq, three_letter_seq, helm_notation
+
+TABLE nucleic_acid:
+  ligand_id(FK), seq, helm
+
+TABLE precursor2peptide:
+  peptide_id(FK), precursor_id(FK)
+
+TABLE ligand_database_link:
+  ligand_id(FK), database_id(FK), placeholder(external ID)
+  -- database_id=24 is RCSB PDB Ligand
+
+TABLE ligand2clinical_trials:
+  ligand_id(FK), clinical_trial_id(FK)
+
+--- INTERACTIONS ---
+TABLE interaction:
+  interaction_id(PK), ligand_id(FK→ligand), object_id(FK→object, can be NULL),
+  species_id(FK), target_ligand_id(FK→ligand, set when target is a ligand),
+  type, action, endogenous(bool), assay_description,
+  affinity_units, affinity_median, affinity_high, affinity_low,
+  whole_organism_assay(bool, true=no specific target)
+
+  AFFINITY — use CASE not COALESCE (median can be 0):
+    CASE WHEN i.affinity_median IS NOT NULL THEN i.affinity_median
+         WHEN i.affinity_high   IS NOT NULL THEN i.affinity_high
+         ELSE i.affinity_low END AS affinity
+
+TABLE interaction_affinity_refs:
+  interaction_id(FK), reference_id(FK)
+
+--- TARGETS (Objects) ---
+TABLE object:
+  object_id(PK), name, type
+  type values: 'GPCR','Enzyme','Transporter','Ion channel',
+               'Nuclear receptor','Catalytic receptor','Other protein'
+
+TABLE receptor_basic:
+  object_id(FK), comments, brief_pharmacology
+
+TABLE structural_info:
+  object_id(FK), gene_symbol, gene_name, hgnc_id, chromosomal_location
+
+TABLE synonym:
+  object_id(FK), synonym_id(PK), name
+
+TABLE receptor2family:
+  object_id(FK), family_id(FK)
+
+TABLE database_link:
+  object_id(FK), database_id(FK), placeholder
+
+TABLE transduction:  (G-protein coupling for GPCRs)
+  object_id(FK),
+  t01(bool=Gs), t02(bool=Gi/Go), t03(bool=Gq/G11), t04(bool=G12/G13),
+  t05(bool=G protein independent), t06(bool=G protein unknown),
+  e01(bool=AC stim), e02(bool=AC inhib), e03(bool=GC stim),
+  e04(bool=PLC stim), e05(bool=K+ channel), e06(bool=Ca2+ channel)
+
+Protein-class detail tables (all have object_id FK):
+  gpcr, nhr, catalytic_receptor, enzyme, transporter, vgic, lgic,
+  other_ic, other_protein
+
+--- DISEASES ---
+TABLE disease:
+  disease_id(PK), name, description
+
+TABLE disease2synonym:
+  disease_id(FK), synonym
+
+TABLE disease2category:
+  disease_id(FK), disease_category_id(FK)
+
+TABLE disease_category:
+  disease_category_id(PK), name
+
+TABLE immuno_disease2ligand:
+  ligand_id(FK), disease_id(FK)
+
+TABLE immuno_disease2object:
+  object_id(FK), disease_id(FK)
+
+TABLE disease_database_link:
+  disease_id(FK), database_id(FK), placeholder
+
+-- DISEASES: query disease table directly; do NOT use family for diseases --
+
+--- FAMILIES & HIERARCHY ---
+TABLE family:
+  family_id(PK), name, type  (type='grouping' = has sub-families)
+
+TABLE grouping:
+  group_id(FK→family, parent), family_id(FK→family, child)
+
+-- Recursive sub-family query:
+-- WITH RECURSIVE subfamilies AS (
+--   SELECT group_id, family_id FROM grouping
+--   WHERE group_id IN (SELECT family_id FROM family WHERE name ILIKE '%[NAME]%')
+--   UNION
+--   SELECT e.group_id, e.family_id FROM grouping e
+--   INNER JOIN subfamilies s ON s.family_id = e.group_id
+-- )
+-- SELECT family_id FROM subfamilies
+-- UNION SELECT family_id FROM family WHERE name ILIKE '%[NAME]%'
+
+--- SPECIES ---
+TABLE species:
+  species_id(PK), name (e.g.'Human'), scientific_name, short_name
+
+--- REFERENCES ---
+TABLE reference:
+  reference_id(PK), title, authors, year, pubmed_id, pub_status, doi, journal
+
+--- PDB STRUCTURES ---
+TABLE pdb_structure:
+  object_id(FK), ligand_id(FK), pdb_id, description
+
+--- FURTHER READING ---
+TABLE grac_further_reading: family_id(FK), reference_id(FK)
+TABLE further_reading: object_id(FK), reference_id(FK)
+
+--- MALARIA ---
+TABLE malaria_stage2interaction:
+  interaction_id(FK), malaria_stage_id(FK→malaria_stage)
+
+=== CRITICAL RULES ===
+1. LIMIT every query to {MAX_QUERY_RESULTS} rows. Never SELECT *.
+2. hba/hbd only — NEVER h_bond_acceptors/h_bond_donors.
+3. Always ILIKE for name/synonym searches.
+4. Diseases → use disease table (not family).
+5. Affinity → CASE WHEN (not COALESCE).
+6. interaction.object_id may be NULL → check target_ligand_id too.
+7. For ligand lookup: WHERE l.name ILIKE '%name%'
+   OR join ligand2synonym: JOIN ligand2synonym ls2 ON ls2.ligand_id=l.ligand_id WHERE ls2.synonym ILIKE '%name%'
 """
 
 SYSTEM_PERSONA = """You are a friendly, knowledgeable assistant for the GtoPdb 
@@ -892,7 +1027,7 @@ def node_generate_sql(state: GtoPdbState) -> GtoPdbState:
                 f"Generate SQL to answer: {state['question']}"
             )}
         ],
-        max_tokens=500,
+        max_tokens=800,
         temperature=0
     )
     sql = resp.choices[0].message.content.strip()
@@ -905,59 +1040,120 @@ def node_generate_sql(state: GtoPdbState) -> GtoPdbState:
 
 
 # ── Node 3: execute SQL ──────────────────────────────────────────────
-def node_execute_sql(state: GtoPdbState) -> GtoPdbState:
-    sql = state.get("sql_query", "")
-    if not sql:
-        state["db_results"] = "[]"
-        return state
+def _run_sql(sql: str) -> tuple[str, str | None]:
+    """Execute SQL, return (json_results_or_ERROR_string, error_message_or_None)"""
     conn = get_db_connection()
     if not conn:
-        state["db_results"] = "ERROR: Could not connect to database"
-        return state
+        return "ERROR: Could not connect to database", "Database connection failed"
     try:
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(sql)
         rows = cur.fetchall()
         cur.close()
-        state["db_results"] = json.dumps(
-            [dict(r) for r in rows[:MAX_QUERY_RESULTS]], default=str
-        )
+        return json.dumps([dict(r) for r in rows[:MAX_QUERY_RESULTS]], default=str), None
     except Exception as e:
         conn.rollback()
-        state["db_results"] = f"ERROR: {e}"
+        return f"ERROR: {e}", str(e)
     finally:
         conn.close()
+
+
+# ── Node 3: execute SQL with one self-healing retry ──────────────────
+def node_execute_sql(state: GtoPdbState) -> GtoPdbState:
+    sql = state.get("sql_query", "")
+    if not sql:
+        state["db_results"] = "[]"
+        return state
+
+    result, error = _run_sql(sql)
+
+    # ── Self-healing: if column error, ask GPT-4o to fix the SQL ─────
+    if error and ("column" in error.lower() or "does not exist" in error.lower()):
+        try:
+            client = _openai_client()
+            fix_resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": (
+                        f"You are a PostgreSQL expert. Fix the SQL query below.\n"
+                        f"The error was: {error}\n\n"
+                        f"{SCHEMA_CHEATSHEET}\n"
+                        "Return ONLY the corrected SQL — no explanation, no markdown, no semicolons."
+                    )},
+                    {"role": "user", "content": f"Broken SQL:\n{sql}"}
+                ],
+                max_tokens=400,
+                temperature=0
+            )
+            fixed_sql = fix_resp.choices[0].message.content.strip()
+            fixed_sql = fixed_sql.replace("```sql", "").replace("```", "").strip()
+            if "LIMIT" not in fixed_sql.upper():
+                fixed_sql += f" LIMIT {MAX_QUERY_RESULTS}"
+
+            result2, error2 = _run_sql(fixed_sql)
+            if error2 is None:
+                state["sql_query"] = fixed_sql   # update with working query
+                state["db_results"] = result2
+                return state
+            # Both attempts failed - store the cleaner error
+            state["db_results"] = f"DB_ERROR: {error2}"
+        except Exception:
+            state["db_results"] = f"DB_ERROR: {error}"
+    elif error:
+        state["db_results"] = f"DB_ERROR: {error}"
+    else:
+        state["db_results"] = result
+
     return state
 
 
-# ── Node 4: format response as markdown ─────────────────────────────
+# ── Node 4: format professional response ─────────────────────────────
 def node_format_response(state: GtoPdbState) -> GtoPdbState:
     client = _openai_client()
     db_results = state.get("db_results", "[]")
+    question   = state.get("question", "")
+    has_error  = db_results.startswith("DB_ERROR") or db_results.startswith("ERROR")
+    is_empty   = db_results.strip() in ("[]", "", "null")
 
-    if db_results.startswith("ERROR"):
-        state["response"] = (
-            f"⚠️ I ran this query but got an error:\n\n"
-            f"```sql\n{state['sql_query']}\n```\n\n"
-            f"**Error:** {db_results}"
+    system_prompt = (
+        "You are a professional pharmacology assistant for the GtoPdb database. "
+        "Always respond in clean, friendly MARKDOWN suitable for end users — "
+        "never expose raw SQL, JSON, column names, or technical error messages.\n\n"
+        "RULES:\n"
+        "- If data is provided: give a 1-line summary, a markdown TABLE, then 2-3 key findings.\n"
+        "- If the database had trouble: say 'I had some trouble retrieving that data from the database.' "
+        "  Then answer as best you can from your pharmacology knowledge, clearly labelling it as general knowledge.\n"
+        "- If no results found: say so naturally, then offer related context from your knowledge.\n"
+        "- If the question is unanswerable without data: say so politely and suggest alternatives.\n"
+        "- NEVER show SQL, error messages, stack traces, or the word 'ERROR' to the user.\n"
+        "- Keep it warm, professional and concise."
+    )
+
+    if has_error:
+        user_content = (
+            f"The user asked: \"{question}\"\n\n"
+            "The database query encountered an issue. "
+            "Answer as best you can from general pharmacology knowledge, "
+            "and mention that live database data was unavailable."
         )
-        return state
+    elif is_empty:
+        user_content = (
+            f"The user asked: \"{question}\"\n\n"
+            "The database returned no results. "
+            "Answer from general pharmacology knowledge if possible, "
+            "or politely explain that no matching records were found."
+        )
+    else:
+        user_content = (
+            f"The user asked: \"{question}\"\n\n"
+            f"Database results (JSON — do NOT show this to user):\n{db_results}"
+        )
 
     resp = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": (
-                "You are a pharmacology data analyst.\n"
-                "Format the SQL results as clean MARKDOWN:\n"
-                "1. One-sentence summary\n"
-                "2. Markdown TABLE with clear column headers and units\n"
-                "3. 2-3 bullet key findings (bold important values)\n"
-                "Never repeat raw JSON. If results are empty say so clearly."
-            )},
-            {"role": "user", "content": (
-                f"Question: {state['question']}\n\n"
-                f"SQL results (JSON):\n{db_results}"
-            )}
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_content}
         ],
         max_tokens=1500,
         temperature=0.3
